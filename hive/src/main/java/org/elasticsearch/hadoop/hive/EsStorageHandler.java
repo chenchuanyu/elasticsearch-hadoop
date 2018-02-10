@@ -18,17 +18,18 @@
  */
 package org.elasticsearch.hadoop.hive;
 
-import java.util.Map;
-import java.util.Properties;
-
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hive.metastore.HiveMetaHook;
 import org.apache.hadoop.hive.ql.metadata.DefaultStorageHandler;
+import org.apache.hadoop.hive.ql.metadata.HiveStoragePredicateHandler;
+import org.apache.hadoop.hive.ql.plan.ExprNodeDesc;
 import org.apache.hadoop.hive.ql.plan.TableDesc;
+import org.apache.hadoop.hive.serde2.Deserializer;
 import org.apache.hadoop.hive.serde2.SerDe;
 import org.apache.hadoop.mapred.InputFormat;
+import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.OutputFormat;
 import org.elasticsearch.hadoop.cfg.HadoopSettingsManager;
 import org.elasticsearch.hadoop.cfg.Settings;
@@ -36,18 +37,19 @@ import org.elasticsearch.hadoop.mr.EsOutputFormat;
 import org.elasticsearch.hadoop.mr.HadoopCfgUtils;
 import org.elasticsearch.hadoop.util.Assert;
 
-import static org.elasticsearch.hadoop.hive.HiveConstants.COLUMNS;
-import static org.elasticsearch.hadoop.hive.HiveConstants.COLUMNS_TYPES;
-import static org.elasticsearch.hadoop.hive.HiveConstants.TABLE_LOCATION;
+import java.util.Map;
+import java.util.Properties;
+
+import static org.elasticsearch.hadoop.hive.HiveConstants.*;
 
 /**
  * Hive storage for writing data into an ElasticSearch index.
- *
+ * <p>
  * The ElasticSearch host/port can be specified through Hadoop properties (see package description)
- * or passed to {@link #EsStorageHandler} through Hive <tt>TBLPROPERTIES</tt>
+ * or passed to {@link EsStorageHandler} through Hive <tt>TBLPROPERTIES</tt>
  */
-@SuppressWarnings({ "deprecation", "rawtypes" })
-public class EsStorageHandler extends DefaultStorageHandler {
+@SuppressWarnings({"deprecation", "rawtypes"})
+public class EsStorageHandler extends DefaultStorageHandler implements HiveStoragePredicateHandler {
 
     private static Log log = LogFactory.getLog(EsStorageHandler.class);
 
@@ -94,8 +96,7 @@ public class EsStorageHandler extends DefaultStorageHandler {
         //settings.setProperty((read ? HiveConstants.INPUT_TBL_PROPERTIES : HiveConstants.OUTPUT_TBL_PROPERTIES), IOUtils.propsToString(tableDesc.getProperties()));
         if (read) {
             // no generic setting
-        }
-        else {
+        } else {
             // replace the default committer when using the old API
             HadoopCfgUtils.setOutputCommitterClass(cfg, EsOutputFormat.EsOutputCommitter.class.getName());
         }
@@ -114,6 +115,12 @@ public class EsStorageHandler extends DefaultStorageHandler {
         }
     }
 
+
+    // add pushdown optimizer from hive to es
+    @Override
+    public DecomposedPredicate decomposePredicate(JobConf jobConf, Deserializer deserializer, ExprNodeDesc exprNodeDesc) {
+        return new EsStoragePredicateHandler().decomposePredicate(jobConf, deserializer, exprNodeDesc);
+    }
 
     @Override
     @Deprecated
