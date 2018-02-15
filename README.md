@@ -19,14 +19,14 @@ ES-Hadoop 2.0.x and 2.1.x are compatible with Elasticsearch __1.X__ *only*
 
 ## Installation
 
-### Stable Release (currently `6.0.0-alpha-2`)
+### Stable Release (currently `6.2.1`)
 Available through any Maven-compatible tool:
 
 ```xml
 <dependency>
   <groupId>org.elasticsearch</groupId>
   <artifactId>elasticsearch-hadoop</artifactId>
-  <version>6.0.0-alpha2</version>
+  <version>6.2.1</version>
 </dependency>
 ```
 or as a stand-alone [ZIP](http://www.elastic.co/downloads/hadoop).
@@ -260,7 +260,7 @@ sc.makeRDD(Seq(numbers, airports)).saveToEs("spark/docs")
 import org.elasticsearch.spark.sql._
 
 val df = sqlContext.read.json("examples/people.json")
-df.saveToES("spark/people")
+df.saveToEs("spark/people")
 ```
 
 ### Java
@@ -300,7 +300,7 @@ JavaSparkContext jsc = new JavaSparkContext(conf);
 Map<String, ?> numbers = ImmutableMap.of("one", 1, "two", 2);     
 Map<String, ?> airports = ImmutableMap.of("OTP", "Otopeni", "SFO", "San Fran");
 
-JavaRDD<Map<String, ?>> javaRDD = jsc.parallelize(ImmutableList.of(doc1, doc2)); 
+JavaRDD<Map<String, ?>> javaRDD = jsc.parallelize(ImmutableList.of(numbers, airports)); 
 JavaEsSpark.saveToEs(javaRDD, "spark/docs");
 ```
 
@@ -310,7 +310,7 @@ JavaEsSpark.saveToEs(javaRDD, "spark/docs");
 import org.elasticsearch.spark.sql.api.java.JavaEsSparkSQL;
 
 DataFrame df = sqlContext.read.json("examples/people.json")
-JavaEsSparkSQL.saveToES(df, "spark/docs")
+JavaEsSparkSQL.saveToEs(df, "spark/docs")
 ```
 
 
