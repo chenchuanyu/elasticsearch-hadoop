@@ -33,8 +33,6 @@ import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.OutputFormat;
 import org.elasticsearch.hadoop.cfg.HadoopSettingsManager;
 import org.elasticsearch.hadoop.cfg.Settings;
-import org.elasticsearch.hadoop.hive.pushdown.PredicateHandler;
-import org.elasticsearch.hadoop.hive.pushdown.Utils;
 import org.elasticsearch.hadoop.mr.EsOutputFormat;
 import org.elasticsearch.hadoop.mr.HadoopCfgUtils;
 import org.elasticsearch.hadoop.util.Assert;
@@ -124,8 +122,8 @@ public class EsStorageHandler extends DefaultStorageHandler implements HiveStora
     @Override
     public DecomposedPredicate decomposePredicate(JobConf jobConf, Deserializer deserializer, ExprNodeDesc exprNodeDesc) {
         Settings settings = HadoopSettingsManager.loadFrom(jobConf);
-        if (Utils.isPushDown(settings)) {
-            PredicateHandler predicateHander = Utils.getPredicateHander(settings);
+        if (HiveUtils.isPushDown(settings)) {
+            PredicateHandler predicateHander = EsStoragePredicateHandler.getInstance();
             if (predicateHander != null) {
                 return predicateHander.decomposePredicate(jobConf, deserializer, exprNodeDesc);
             }
