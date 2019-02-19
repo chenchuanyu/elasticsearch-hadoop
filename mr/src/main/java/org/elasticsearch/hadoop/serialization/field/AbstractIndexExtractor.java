@@ -50,12 +50,17 @@ public abstract class AbstractIndexExtractor implements IndexExtractor, Settings
         // break it down into index/type
         String[] split = pattern.split("/");
         Assert.isTrue(!ObjectUtils.isEmpty(split), "invalid pattern given " + pattern);
-        Assert.isTrue(split.length == 2, "invalid pattern given " + pattern);
 
         // check pattern
         hasPattern = pattern.contains("{") && pattern.contains("}");
         index = parse(split[0].trim());
-        type = parse(split[1].trim());
+        if (split.length > 1) {
+            // Assert the pattern is only at most 2, and at the least 1
+            Assert.isTrue(split.length == 2, "invalid pattern given " + pattern);
+            type = parse(split[1].trim());
+        } else {
+            type = null;
+        }
     }
 
     protected List<Object> parse(String string) {
@@ -112,10 +117,11 @@ public abstract class AbstractIndexExtractor implements IndexExtractor, Settings
         for (Object object : list) {
             if (object instanceof FieldExtractor) {
                 Object field = ((FieldExtractor) object).field(target);
-                if (field == NOT_FOUND) {
+                if (field == null) {
+                    throw new EsHadoopIllegalArgumentException(String.format("Found null value for pattern element in %s", pattern));
+                } else if (field == NOT_FOUND) {
                     throw new EsHadoopIllegalArgumentException(String.format("Cannot find match for %s", pattern));
-                }
-                else {
+                } else {
                     sb.append(StringUtils.jsonEncoding(field.toString()));
                 }
             }
@@ -130,9 +136,11 @@ public abstract class AbstractIndexExtractor implements IndexExtractor, Settings
         StringBuilder sb = new StringBuilder();
         sb.append("\"_index\":\"");
         append(sb, index, target);
-        sb.append("\",");
-        sb.append("\"_type\":\"");
-        append(sb, type, target);
+        if (type != null) {
+            sb.append("\",");
+            sb.append("\"_type\":\"");
+            append(sb, type, target);
+        }
         sb.append("\"");
 
         return new RawJson(sb.toString());

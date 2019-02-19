@@ -19,6 +19,7 @@
 package org.elasticsearch.hadoop.integration.rest;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -32,13 +33,14 @@ import org.elasticsearch.hadoop.rest.Resource;
 import org.elasticsearch.hadoop.rest.RestRepository;
 import org.elasticsearch.hadoop.rest.ScrollQuery;
 import org.elasticsearch.hadoop.serialization.ScrollReader;
-import org.elasticsearch.hadoop.serialization.ScrollReader.ScrollReaderConfig;
+import org.elasticsearch.hadoop.serialization.ScrollReaderConfigBuilder;
 import org.elasticsearch.hadoop.serialization.builder.JdkValueReader;
 import org.elasticsearch.hadoop.serialization.builder.JdkValueWriter;
 import org.elasticsearch.hadoop.serialization.dto.mapping.MappingSet;
 import org.elasticsearch.hadoop.util.EsMajorVersion;
 import org.elasticsearch.hadoop.util.SettingsUtils;
 import org.elasticsearch.hadoop.util.TestSettings;
+import org.elasticsearch.hadoop.util.TestUtils;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -52,10 +54,13 @@ public class AbstractRestQueryTest {
     private static Log log = LogFactory.getLog(AbstractRestQueryTest.class);
     private RestRepository client;
     private Settings settings;
+    private EsMajorVersion version;
 
     @Before
     public void start() throws IOException {
+        version = TestUtils.getEsClusterInfo().getMajorVersion();
         settings = new TestSettings("rest/savebulk");
+        settings.setInternalVersion(version);
         //testSettings.setPort(9200)
         settings.setProperty(ConfigurationOptions.ES_SERIALIZATION_WRITER_VALUE_CLASS, JdkValueWriter.class.getName());
         settings.setProperty(ConfigurationOptions.ES_SERIALIZATION_WRITER_VALUE_CLASS, JdkValueWriter.class.getName());
@@ -79,12 +84,11 @@ public class AbstractRestQueryTest {
     public void testQueryBuilder() throws Exception {
         Settings sets = settings.copy();
         sets.setProperty(ConfigurationOptions.ES_QUERY, "?q=me*");
-        EsMajorVersion esVersion = EsMajorVersion.V_5_X;
+        sets.setInternalVersion(version);
         Resource read = new Resource(settings, true);
         SearchRequestBuilder qb =
-                new SearchRequestBuilder(esVersion, settings.getReadMetadata() && settings.getReadMetadataVersion())
-                        .types(read.type())
-                        .indices(read.index())
+                new SearchRequestBuilder(version, settings.getReadMetadata() && settings.getReadMetadataVersion())
+                        .resource(read)
                         .query(QueryUtils.parseQuery(settings))
                         .scroll(settings.getScrollKeepAlive())
                         .size(settings.getScrollSize())
@@ -93,8 +97,16 @@ public class AbstractRestQueryTest {
                         .filters(QueryUtils.parseFilters(settings));
         MappingSet mappingSet = client.getMappings();
 
-        ScrollReaderConfig scrollReaderConfig = new ScrollReaderConfig(new JdkValueReader(), mappingSet.getResolvedView(), true, "_metadata", false, false);
-        ScrollReader reader = new ScrollReader(scrollReaderConfig);
+        ScrollReaderConfigBuilder scrollCfg = ScrollReaderConfigBuilder.builder(new JdkValueReader(), settings)
+                .setResolvedMapping(mappingSet.getResolvedView())
+                .setReadMetadata(true)
+                .setMetadataName("_metadata")
+                .setReturnRawJson(false)
+                .setIgnoreUnmappedFields(false)
+                .setIncludeFields(Collections.<String>emptyList())
+                .setExcludeFields(Collections.<String>emptyList())
+                .setIncludeArrayFields(Collections.<String>emptyList());
+        ScrollReader reader = new ScrollReader(scrollCfg);
 
         int count = 0;
         for (ScrollQuery query = qb.build(client, reader); query.hasNext();) {

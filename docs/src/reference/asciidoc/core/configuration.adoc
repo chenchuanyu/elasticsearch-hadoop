@@ -154,7 +154,7 @@ Whether the input is already in JSON format or not (the default). Please see the
 integration for more details about using JSON directly.
 
 `es.write.operation` (default index)::
-The write operation {eh} should peform - can be any of:
+The write operation {eh} should perform - can be any of:
 `index` (default);; new data is added while existing data (based on its id) is replaced (reindexed).
 `create`;; adds new data - if the data already exists (based on its id), an exception is thrown.
 `update`;; updates existing data (based on its id). If no data is found, an exception is thrown.
@@ -293,9 +293,9 @@ es.read.field.as.array.include = nested.bar:3
 ----
 
 `es.read.field.as.array.exclude` (default empty)::
-Fields/properties that should be considered as arrays/lists. Similar to `es.read.field.as.array.include` above. Multiple values can be specified by using a comma. 
+Fields/properties that should not be considered as arrays/lists. Similar to `es.read.field.as.array.include` above. Multiple values can be specified by using a comma.
 By default, no value is specified meaning no properties/fields are excluded (and since none is included as indicated above), no field is treated as array
-before-hand.
+before-hand. Note that this setting does not affect nested fields as they are always considered to be arrays.
 
 [float]
 ==== Metadata (when reading from {es})
@@ -385,19 +385,33 @@ WARN main mr.EsInputFormat - Field(s) [naem, adress] not found
    in the Elasticsearch mapping specified; did you mean [name, location.address]?
 ----
 
+added[6.6]
+`es.read.shard.preference` (default none)::
+The value to use for the shard preference of a search operation when executing a scroll query. If left empty, the
+connector will automatically sense when to use the `_local` shard preference. This is most useful in hot/cold
+architectures when you need direct control over which nodes search operations are executed on:
+
+[source,bash]
+----
+es.read.shard.preference = _only_nodes:abc*
+----
+
+IMPORTANT: {ehtm} makes no attempt to validate this preference setting before running, and incorrectly configured shard
+preferences may cause scroll queries to fail in the event that shards cannot be located with the provided preferences.
+
 `es.read.source.filter` (default none)::
 Normally when using an integration that allows specifying some form of schema
-(such as Hive, or Cascading), the connector will automatically extract the field
+(such as Hive), the connector will automatically extract the field
 names from the schema and request only those fields from {es} to save on bandwidth.
 When using an integration that _does not_ leverage any data schemas (such as normal
-MR and Spark), this property allows you to specify a comma separated list of fields
-that you would like to return from {es}.
+MR and Spark), this property allows you to specify a comma delimited string of field
+names that you would like to return from {es}.
 
 IMPORTANT: If `es.read.source.filter` is set, an exception will be thrown in the
 case that the connector tries to push down a different source field filtering.
 In these cases you should clear this property and trust that the connector knows
 which fields should be returned. This occurs in SparkSQL, Hive, and when
-specifying a schema in Cascading and Pig.
+specifying a schema in Pig.
 
 [source,bash]
 ----
@@ -421,8 +435,14 @@ caution.
 ==== Input
 
 added[5.0.0]
-`es.input.max.docs.per.partition` (default 100000)::
-When reading from an {es} cluster that supports scroll slicing ({es} v5.0.0 and above), this parameter advises the connector on what the maximum number of documents per input partition should be. The connector will sample and estimate the number of documents on each shard to be read and divides each shard into input slices using the value supplied by this property. This property is ignored if you are reading from an {es} cluster that does not support scroll slicing ({es} any version below v5.0.0).
+`es.input.max.docs.per.partition` ::
+When reading from an {es} cluster that supports scroll slicing ({es} v5.0.0 and above), this parameter advises the
+connector on what the maximum number of documents per input partition should be. The connector will sample and estimate
+the number of documents on each shard to be read and divides each shard into input slices using the value supplied by
+this property. This property is a suggestion, not a guarantee. The final number of documents per partition is not
+guaranteed to be below this number, but rather, they will be close to this number. This property is ignored if you are
+reading from an {es} cluster that does not support scroll slicing ({es} any version below v5.0.0). By default, this
+value is unset, and the input partitions are calculated based on the number of shards in the indices being read.
 
 [float]
 ==== Network
@@ -490,13 +510,18 @@ For example, here the user is setting the `Max-Forwards` HTTP header:
 es.net.http.header.Max-Forwards = 10
 ----
 
+[float]
+==== Secure Settings
+
+added[6.4]
+`es.keystore.location`:: location of the secure settings keystore file (typically a URL, without a prefix it is interpreted as a classpath entry). See <<keystore>> for more info.
 
 added[2.1]
 [float]
 ==== Basic Authentication
 
 `es.net.http.auth.user`:: Basic Authentication user name
-`es.net.http.auth.pass`:: Basic Authentication password
+`es.net.http.auth.pass`:: <<keystore,Securable>>. Basic Authentication password
 
 added[2.1]
 [float]
@@ -506,13 +531,13 @@ added[2.1]
 
 `es.net.ssl.keystore.location`:: key store (if used) location (typically a URL, without a prefix it is interpreted as a classpath entry)
 
-`es.net.ssl.keystore.pass`:: key store password
+`es.net.ssl.keystore.pass`:: <<keystore,Securable>>. key store password
 
 `es.net.ssl.keystore.type` (default JKS):: key store type. PK12 is a common, alternative format
 
 `es.net.ssl.truststore.location`:: trust store location (typically a URL, without a prefix it is interpreted as a classpath entry)
 
-`es.net.ssl.truststore.pass`:: trust store password
+`es.net.ssl.truststore.pass`:: <<keystore,Securable>>. trust store password
 
 `es.net.ssl.cert.allow.self.signed` (default false):: Whether or not to allow self signed certificates
 
@@ -524,7 +549,7 @@ added[2.1]
 `es.net.proxy.http.host`:: Http proxy host name
 `es.net.proxy.http.port`:: Http proxy port
 `es.net.proxy.http.user`:: Http proxy user name
-`es.net.proxy.http.pass`:: Http proxy password
+`es.net.proxy.http.pass`:: <<keystore,Securable>>. Http proxy password
 `es.net.proxy.http.use.system.props`(default yes):: Whether the use the system Http proxy properties (namely `http.proxyHost` and `http.proxyPort`) or not
 
 added[2.2]
@@ -534,14 +559,14 @@ added[2.2]
 added[2.2]
 `es.net.proxy.https.user`:: Https proxy user name
 added[2.2]
-`es.net.proxy.https.pass`:: Https proxy password
+`es.net.proxy.https.pass`:: <<keystore,Securable>>. Https proxy password
 added[2.2]
 `es.net.proxy.https.use.system.props`(default yes):: Whether the use the system Https proxy properties (namely `https.proxyHost` and `https.proxyPort`) or not
 
 `es.net.proxy.socks.host`:: Http proxy host name
 `es.net.proxy.socks.port`:: Http proxy port
 `es.net.proxy.socks.user`:: Http proxy user name
-`es.net.proxy.socks.pass`:: Http proxy password
+`es.net.proxy.socks.pass`:: <<keystore,Securable>>. Http proxy password
 `es.net.proxy.socks.use.system.props`(default yes):: Whether the use the system Socks proxy properties (namely `socksProxyHost` and `socksProxyHost`) or not
 
 NOTE: {eh} allows proxy settings to be applied only to its connection using the setting above. Take extra care when there is already a JVM-wide proxy setting (typically through system properties) to avoid unexpected behavior.
@@ -568,10 +593,10 @@ Number of retries for a given batch in case {es} is overloaded and data is rejec
 Time to wait between batch write retries that are caused by bulk rejections.
 
 `es.ser.reader.value.class` (default _depends on the library used_)::
-Name of the `ValueReader` implementation for converting JSON to objects. This is set by the framework depending on the library ({mr}, Cascading, Hive, Pig, etc...) used.
+Name of the `ValueReader` implementation for converting JSON to objects. This is set by the framework depending on the library ({mr}, Hive, Pig, etc...) used.
 
 `es.ser.writer.value.class` (default _depends on the library used_)::
-Name of the `ValueWriter` implementation for converting objects to JSON. This is set by the framework depending on the library ({mr}, Cascading, Hive, Pig, etc...) used.
+Name of the `ValueWriter` implementation for converting objects to JSON. This is set by the framework depending on the library ({mr}, Hive, Pig, etc...) used.
 
 [[configuration-runtime]]
 == Runtime options
@@ -669,25 +694,85 @@ The authentication support in {eh} is of two types:
 Username/Password:: Set these through `es.net.http.auth.user` and `es.net.http.auth.pass` properties.
 PKI/X.509:: Use X.509 certificates to authenticate {eh} to {eh}. For this, one would need to setup the `keystore` containing the private key and certificate to the appropriate user (configured in {es}) and the `truststore` with the CA certificate used to sign the SSL/TLS certificates in the {es} cluster. That is one setup the key to authenticate {eh} and also to verify that is the right one. To do so, one should setup the `es.net.ssl.keystore.location` and `es.net.ssl.truststore.location` properties to indicate the `keystore` and `truststore` to use. It is recommended to have these secured through a password in which case `es.net.ssl.keystore.pass` and `es.net.ssl.truststore.pass` properties are required.
 
+[float]
+[[keystore]]
+==== Secure Settings
+added[6.4.0]
+
+{eh} is configured using settings that sometimes contain sensitive information such as passwords. It may not be
+desirable for those property values to appear in the job configuration as plain text. For these situations, {eh} supports
+reading some secure properties from a keystore file.
+
+NOTE: The {eh} keystore currently only provides obfuscation. In the future, password protection will be added.
+
+Only the following configurations can be read from the secure settings:
+* `es.net.http.auth.pass`
+* `es.net.ssl.keystore.pass`
+* `es.net.ssl.truststore.pass`
+* `es.net.proxy.http.pass`
+* `es.net.proxy.https.pass`
+* `es.net.proxy.socks.pass`
+
+Provided with {eh} is a keytool program that will allow you to create and add entries to a compatible keystore file.
+[source,bash]
+----
+$> java -classpath path/to/eshadoop.jar org.elasticsearch.hadoop.cli.Keytool <command> <args>
+----
+
+To create a keystore file in your working directory, run the `create` command:
+[source,bash]
+----
+$> java -classpath path/to/eshadoop.jar org.elasticsearch.hadoop.cli.Keytool create
+$> ls
+esh.keystore
+----
+
+A list of the settings in the keystore is available with the `list` command:
+[source,bash]
+----
+$> java -classpath path/to/eshadoop.jar org.elasticsearch.hadoop.cli.Keytool list
+----
+
+Once a keystore file has been created, your sensitive settings can be added using the `add` command:
+[source,bash]
+----
+$> java -classpath path/to/eshadoop.jar org.elasticsearch.hadoop.cli.Keytool add the.setting.name.to.set
+----
+A prompt will appear and request the value for the setting. To pass the value through stdin, use the `--stdin` flag:
+[source,bash]
+----
+$> cat /file/containing/setting/value | java -classpath path/to/eshadoop.jar org.elasticsearch.hadoop.cli.Keytool add --stdin the.setting.name.to.set
+----
+
+To remove a setting from the keystore, use the `remove` command:
+[source,bash]
+----
+$> java -classpath path/to/eshadoop.jar org.elasticsearch.hadoop.cli.Keytool remove the.setting.name.to.set
+----
+
+Once your settings are all specified, you must make sure that the keystore is available on every node. This can
+be done by placing it on each node's local file system, or by adding the keystore to the job's classpath. Once the
+keystore has been added, its location must be specified with the `es.keystore.location`. To reference a local file,
+use a fully qualified file URL (ex `file:///path/to/file`). If the secure store is propagated using the command line, just
+use the file's name.
 
 [[logging]]
 == Logging
 
-{eh} uses http://commons.apache.org/proper/commons-logging/[commons-logging] library, same as Hadoop, for its logging infrastructure and thus it shares the same configuration means. Out of the box, no configuration is required - by default, {eh} logs relevant information about the job progress at `INFO` level. Typically, whatever integration you are using (Map/Reduce, Cascading, Hive, Pig), each job will print in the console at least one message indicating the {eh} version used:
+{eh} uses http://commons.apache.org/proper/commons-logging/[commons-logging] library, same as Hadoop, for its logging infrastructure and thus it shares the same configuration means. Out of the box, no configuration is required - by default, {eh} logs relevant information about the job progress at `INFO` level. Typically, whatever integration you are using (Map/Reduce, Hive, Pig), each job will print in the console at least one message indicating the {eh} version used:
 
 [source,bash]
 ----
 16:13:01,946  INFO main util.Version - Elasticsearch Hadoop v2.0.0.BUILD-SNAPSHOT [f2c5c3e280]
 ----
 
-Configuring logging for Hadoop (or Cascading, Hive and Pig) is outside the scope of this documentation, however in short, at runtime, Hadoop relies on http://logging.apache.org/log4j/1.2/[log4j 1.2] as an actual logging implementation. In practice, this means adding the package name of interest and its level logging the `log4j.properties` file in the job classpath.
+Configuring logging for Hadoop (or Hive and Pig) is outside the scope of this documentation, however in short, at runtime, Hadoop relies on http://logging.apache.org/log4j/1.2/[log4j 1.2] as an actual logging implementation. In practice, this means adding the package name of interest and its level logging the `log4j.properties` file in the job classpath.
 {eh} provides the following important packages:
 [cols="^,^",options="header"]
 
 |===
 | Package | Purpose
 
-|`org.elasticsearch.hadoop.cascading`       | Cascading integration
 |`org.elasticsearch.hadoop.hive`            | Apache Hive integration
 |`org.elasticsearch.hadoop.mr`              | {mr} functionality
 |`org.elasticsearch.hadoop.pig`             | Apache Pig integration

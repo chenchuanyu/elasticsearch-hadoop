@@ -4,6 +4,7 @@ import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 
@@ -16,55 +17,61 @@ import org.elasticsearch.hadoop.serialization.FieldType;
  */
 public class MappingSet implements Serializable {
 
+    private static final String RESOLVED_INDEX_NAME = "*";
     private static final String RESOLVED_MAPPING_NAME = "*";
+
+    // For versions of Elasticsearch that do not have types.
+    public static final String TYPELESS_MAPPING_NAME = "";
 
     private final boolean empty;
     private final Map<String, Map<String, Mapping>> indexTypeMap = new HashMap<String, Map<String, Mapping>>();
     private final Mapping resolvedSchema;
 
-    public MappingSet(List<Field> fields) {
-        if (fields.isEmpty()) {
+    public MappingSet(List<Mapping> mappings) {
+        if (mappings.isEmpty()) {
             this.empty = true;
-            this.resolvedSchema = new Mapping(RESOLVED_MAPPING_NAME, Field.NO_FIELDS);
+            this.resolvedSchema = new Mapping(RESOLVED_INDEX_NAME, RESOLVED_MAPPING_NAME, Field.NO_FIELDS);
         } else {
             this.empty = false;
-            for (Field field : fields) {
-                String indexName = field.name();
-                Field[] mappings = field.properties();
-                Map<String, Mapping> mappingsToSchema = new HashMap<String, Mapping>();
-                this.indexTypeMap.put(indexName, mappingsToSchema);
+            for (Mapping mapping: mappings) {
+                String indexName = mapping.getIndex();
+                String typeName = mapping.getType();
 
-                for (Field mappingHeader : mappings) {
-                    // There's only one mapping Header named "mappings". Unwrap it to get the actual mappings.
-                    for (Field mapping : mappingHeader.properties()) {
-                        mappingsToSchema.put(mapping.name(), new Mapping(mapping.name(), mapping.properties()));
-                    }
+                // Create a new mapping of type name to schema and register it with the index type map.
+                Map<String, Mapping> mappingsToSchema = this.indexTypeMap.get(indexName);
+                if (mappingsToSchema == null) {
+                    mappingsToSchema = new HashMap<String, Mapping>();
+                    this.indexTypeMap.put(indexName, mappingsToSchema);
                 }
 
+                // Make sure that we haven't encountered this type already
+                if (mappingsToSchema.containsKey(typeName)) {
+                    String message;
+                    if (typeName.equals(TYPELESS_MAPPING_NAME)) {
+                        message = String.format("Invalid mapping set given. Multiple unnamed mappings in the index [%s].",
+                                indexName);
+                    } else {
+                        message = String.format("Invalid mapping set given. Multiple mappings of the same name [%s] in the index [%s].",
+                                typeName, indexName);
+                    }
+                    throw new EsHadoopIllegalArgumentException(message);
+                }
+
+                mappingsToSchema.put(typeName, mapping);
             }
-            this.resolvedSchema = mergeMappings(fields);
+            this.resolvedSchema = mergeMappings(mappings);
         }
     }
 
-    private static Mapping mergeMappings(List<Field> fields) {
+    private static Mapping mergeMappings(List<Mapping> mappings) {
         Map<String, Object[]> fieldMap = new LinkedHashMap<String, Object[]>();
-        for (Field rootField : fields) {
-            Field[] props = rootField.properties();
-            // handle the common case of mapping by removing the first field (mapping.)
-            if (props.length > 0 && props[0] != null && "mappings".equals(props[0].name()) && FieldType.OBJECT.equals(props[0].type())) {
-                // can't return the type as it is an object of properties
-                Field[] mappings = props[0].properties();
-
-                for (Field mapping : mappings) {
-                    // At this point we have the root mapping info
-                    for (Field field : mapping.properties()) {
-                        addToFieldTable(field, "", fieldMap);
-                    }
-                }
+        for (Mapping mapping: mappings) {
+            for (Field field : mapping.getFields()) {
+                addToFieldTable(field, "", fieldMap);
             }
         }
         Field[] collapsed = collapseFields(fieldMap);
-        return new Mapping(RESOLVED_MAPPING_NAME, collapsed);
+        return new Mapping(RESOLVED_INDEX_NAME, RESOLVED_MAPPING_NAME, collapsed);
     }
 
     @SuppressWarnings("unchecked")
@@ -91,9 +98,13 @@ public class MappingSet implements Serializable {
             Field previousField = (Field)entry[0];
             // ensure that it doesn't conflict
             if (!previousField.type().equals(field.type())) {
-                throw new EsHadoopIllegalArgumentException("Incompatible types found in multi-mapping: " +
-                        "Field ["+fullName+"] has conflicting types of ["+previousField.type()+"] and ["+
-                        field.type()+"].");
+                // Attempt to resolve field type conflicts by upcasting fields to a common "super type"
+                FieldType resolvedType = resolveTypeConflict(fullName, previousField.type(), field.type());
+                // If successful, update the previous field entry with the updated field type
+                if (!previousField.type().equals(resolvedType)) {
+                    previousField = new Field(previousField.name(), resolvedType, previousField.properties());
+                    entry[0] = previousField;
+                }
             }
             // If it does not conflict, visit it's children if it has them
             if (FieldType.isCompound(field.type())) {
@@ -104,6 +115,33 @@ public class MappingSet implements Serializable {
                 }
             }
         }
+    }
+
+    private static FieldType resolveTypeConflict(String fullName, FieldType existing, FieldType incoming) {
+        // Prefer to upcast the incoming field to the existing first
+        LinkedHashSet<FieldType> incomingSuperTypes = incoming.getCastingTypes();
+        if (incomingSuperTypes.contains(existing)) {
+            // Incoming can be cast to existing.
+            return existing;
+        }
+        // See if existing can be upcast to the incoming field's type next
+        LinkedHashSet<FieldType> existingSuperTypes = existing.getCastingTypes();
+        if (existingSuperTypes.contains(incoming)) {
+            // Existing can be cast to incoming
+            return incoming;
+        }
+        // Finally, Try to pick the lowest common super type for both fields if it exists
+        if (incomingSuperTypes.size() > 0 && existingSuperTypes.size() > 0) {
+            LinkedHashSet<FieldType> combined = new LinkedHashSet<FieldType>(incomingSuperTypes);
+            combined.retainAll(existingSuperTypes);
+            if (combined.size() > 0) {
+                return combined.iterator().next();
+            }
+        }
+        // If none of the above options succeed, the fields are conflicting
+        throw new EsHadoopIllegalArgumentException("Incompatible types found in multi-mapping: " +
+                "Field ["+fullName+"] has conflicting types of ["+existing+"] and ["+
+                incoming+"].");
     }
 
     @SuppressWarnings("unchecked")

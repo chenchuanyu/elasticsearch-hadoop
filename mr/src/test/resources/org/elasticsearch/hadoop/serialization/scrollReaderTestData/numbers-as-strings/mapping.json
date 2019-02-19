@@ -1,0 +1,11 @@
+{
+  "pig" : {
+    "mappings" : {
+      "properties" : {
+        "number" : {
+          "type" : "long"
+        }
+      }
+    }
+  }
+}

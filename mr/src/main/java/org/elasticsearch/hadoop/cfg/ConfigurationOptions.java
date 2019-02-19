@@ -67,6 +67,9 @@ public interface ConfigurationOptions {
 
     String ES_NODES_RESOLVE_HOST_NAME = "es.nodes.resolve.hostname";
 
+    /** Secure Settings Keystore */
+    String ES_KEYSTORE_LOCATION = "es.keystore.location";
+
     /** Elasticsearch batch size given in bytes */
     String ES_BATCH_SIZE_BYTES = "es.batch.size.bytes";
     String ES_BATCH_SIZE_BYTES_DEFAULT = "1mb";
@@ -135,7 +138,7 @@ public interface ConfigurationOptions {
 
     /** Input options **/
     String ES_MAX_DOCS_PER_PARTITION = "es.input.max.docs.per.partition";
-    int ES_DEFAULT_MAX_DOCS_PER_PARTITION = 100000;
+
     String ES_INPUT_JSON = "es.input.json";
     String ES_INPUT_JSON_DEFAULT = "no";
 
@@ -149,8 +152,14 @@ public interface ConfigurationOptions {
     String ES_INDEX_READ_ALLOW_RED_STATUS = "es.index.read.allow.red.status";
     String ES_INDEX_READ_ALLOW_RED_STATUS_DEFAULT = "false";
 
+    /** Elasticsearch shard search preference */
+    String ES_READ_SHARD_PREFERENCE = "es.read.shard.preference";
+    String ES_READ_SHARD_PREFERENCE_DEFAULT = "";
+
     /** Mapping types */
     String ES_MAPPING_DEFAULT_EXTRACTOR_CLASS = "es.mapping.default.extractor.class";
+    
+    String ES_MAPPING_METADATA_EXTRACTOR_CLASS = "es.mapping.metadata.extractor.class";
 
     String ES_MAPPING_ID = "es.mapping.id";
     String ES_MAPPING_ID_EXTRACTOR_CLASS = "es.mapping.id.extractor.class";
@@ -279,6 +288,10 @@ public interface ConfigurationOptions {
     String ES_NET_HTTP_AUTH_USER = "es.net.http.auth.user";
     String ES_NET_HTTP_AUTH_PASS = "es.net.http.auth.pass";
 
+    String ES_NET_SPNEGO_AUTH_ELASTICSEARCH_PRINCIPAL = "es.net.spnego.auth.elasticsearch.principal";
+    String ES_NET_SPNEGO_AUTH_MUTUAL = "es.net.spnego.auth.mutual";
+    String ES_NET_SPNEGO_AUTH_MUTUAL_DEFAULT = "false";
+
     String ES_NET_PROXY_HTTP_HOST = "es.net.proxy.http.host";
     String ES_NET_PROXY_HTTP_PORT = "es.net.proxy.http.port";
     String ES_NET_PROXY_HTTP_USER = "es.net.proxy.http.user";
@@ -293,10 +306,20 @@ public interface ConfigurationOptions {
     String ES_NET_PROXY_HTTPS_USE_SYSTEM_PROPS = "es.net.proxy.https.use.system.props";
     String ES_NET_PROXY_HTTPS_USE_SYSTEM_PROPS_DEFAULT = "yes";
 
+    @Deprecated
     String ES_NET_PROXY_SOCKS_HOST = "es.net.proxy.socks.host";
+    @Deprecated
     String ES_NET_PROXY_SOCKS_PORT = "es.net.proxy.socks.port";
+    @Deprecated
     String ES_NET_PROXY_SOCKS_USER = "es.net.proxy.socks.user";
+    @Deprecated
     String ES_NET_PROXY_SOCKS_PASS = "es.net.proxy.socks.pass";
+    @Deprecated
     String ES_NET_PROXY_SOCKS_USE_SYSTEM_PROPS = "es.net.proxy.socks.use.system.props";
+    @Deprecated
     String ES_NET_PROXY_SOCKS_USE_SYSTEM_PROPS_DEFAULT = "yes";
+
+    /** Security options **/
+    String ES_SECURITY_AUTHENTICATION = "es.security.authentication";
+    String ES_SECURITY_USER_PROVIDER_CLASS = "es.security.user.provider.class";
 }

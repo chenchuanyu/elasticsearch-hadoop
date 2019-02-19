@@ -24,8 +24,8 @@ import org.elasticsearch.hadoop.util.TestSettings;
 import org.junit.Before;
 import org.junit.Test;
 
-import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 public class QueryTest {
     private TestSettings cfg;
@@ -39,18 +39,34 @@ public class QueryTest {
 
     @Test
     public void testSimpleQuery() {
+        cfg.setInternalVersion(EsMajorVersion.LATEST);
         cfg.setResourceRead("foo/bar");
-        assertTrue(builder.indices("foo").types("bar").toString().contains("foo/bar"));
+        Resource typed = new Resource(cfg, true);
+        assertTrue(builder.resource(typed).toString().contains("foo/bar"));
+    }
+
+    @Test
+    public void testSimpleQueryTypeless() {
+        cfg.setInternalVersion(EsMajorVersion.LATEST);
+        cfg.setResourceRead("foo");
+        Resource typeless = new Resource(cfg, true);
+        assertTrue(builder.resource(typeless).toString().contains("foo"));
+        assertTrue(builder.indices("foo").toString().contains("foo"));
     }
 
     @Test
     public void testExcludeSourceTrue() {
-        assertTrue(builder.excludeSource(true).toString().contains("_source=false"));
+        assertTrue(builder.excludeSource(true).toString().contains("\"_source\":false"));
     }
 
     @Test
     public void testExcludeSourceFalse() {
-        assertFalse(builder.fields("a,b").excludeSource(false).toString().contains("_source=false"));
+        assertTrue(builder.fields("a,b").excludeSource(false).toString().contains("\"_source\":[\"a\",\"b\"]"));
+    }
+
+    @Test
+    public void testEmptySource() {
+        assertFalse(builder.fields("").excludeSource(false).toString().contains("\"_source\""));
     }
 
     @Test(expected=EsHadoopIllegalArgumentException.class)

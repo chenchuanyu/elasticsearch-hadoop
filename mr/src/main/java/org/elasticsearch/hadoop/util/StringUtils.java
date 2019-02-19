@@ -43,8 +43,10 @@ public abstract class StringUtils {
     public static final String SLASH = "/";
     public static final String PATH_TOP = "..";
     public static final String PATH_CURRENT = ".";
-    public static final String SOURCE_ROOT = "hits.hits._source.";
-    public static final String FIELDS_ROOT = "hits.hits.fields.";
+    public static final String SOURCE_FIELD_NAME = "_source.";
+    public static final String FIELD_FIELD_NAME = "fields.";
+    public static final String SOURCE_ROOT = "hits.hits."+SOURCE_FIELD_NAME;
+    public static final String FIELDS_ROOT = "hits.hits."+FIELD_FIELD_NAME;
     public static final String[] EMPTY_ARRAY = new String[0];
 
     private static final boolean HAS_JACKSON_CLASS = ObjectUtils.isClassPresent("org.codehaus.jackson.io.JsonStringEncoder", StringUtils.class.getClassLoader());
@@ -339,6 +341,50 @@ public abstract class StringUtils {
         return res;
     }
 
+    private static final char[] SINGLE_INDEX_ILLEGAL_START_CHARACTERS = {'_', '+', '-'};
+    private static final char[] SINGLE_INDEX_ILLEGAL_CHARACTERS = {' ', '\"', '*', '\\', '<', '|', ',', '>', '/', '?'};
+
+    /**
+     * Determines if a string is a valid name for a singular index in that
+     * it contains no illegal index name characters, and would likely be legal
+     * for use with API's that operate on singular indices only (writes, etc)
+     */
+    public static boolean isValidSingularIndexName(String singleIndexName) {
+        boolean firstRun = true;
+        char[] chars = singleIndexName.toCharArray();
+        for (int idx = 0; idx < chars.length; idx++) {
+            char c = chars[idx];
+            // Check first character for illegal starting chars
+            if (firstRun) {
+                for (char illegalStartCharacter : SINGLE_INDEX_ILLEGAL_START_CHARACTERS) {
+                    if (c == illegalStartCharacter) {
+                        return false;
+                    }
+                }
+                firstRun = false;
+            }
+            // Check for any illegal chars
+            for (char illegalCharacter : SINGLE_INDEX_ILLEGAL_CHARACTERS) {
+                if (c == illegalCharacter) {
+                    return false;
+                }
+            }
+            // No uppercase characters
+            if (Character.isHighSurrogate(c)) {
+                // Be sensitive to surrogate pairs in unicode...
+                int hi = (int) c;
+                int lo = (int) chars[++idx];
+                int codePoint = ((hi - 0xD800) * 0x400) + (lo - 0XDC00) + 0x10000;
+                if (Character.isUpperCase(codePoint)) {
+                    return false;
+                }
+            } else if (Character.isUpperCase(c)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     public static boolean isLowerCase(CharSequence string) {
         for (int index = 0; index < string.length(); index++) {
             if (Character.isUpperCase(string.charAt(index))) {
@@ -409,65 +455,15 @@ public abstract class StringUtils {
         return new IpAndPort(httpAddr);
     }
 
-    public static String normalize(String path) {
-        if (path == null) {
-            return null;
-        }
-        String pathToUse = path.replace("\\", SLASH);
-
-        int prefixIndex = pathToUse.indexOf(":");
-        String prefix = "";
-        if (prefixIndex != -1) {
-            prefix = pathToUse.substring(0, prefixIndex + 1);
-            if (prefix.contains(SLASH)) {
-                prefix = "";
-            }
-            else {
-                pathToUse = pathToUse.substring(prefixIndex + 1);
-            }
-        }
-        if (pathToUse.startsWith(SLASH)) {
-            prefix = prefix + SLASH;
-            pathToUse = pathToUse.substring(1);
-        }
-
-        List<String> pathList = tokenize(pathToUse, SLASH);
-        List<String> pathTokens = new LinkedList<String>();
-        int tops = 0;
-
-        for (int i = pathList.size() - 1; i >= 0; i--) {
-            String element = pathList.get(i);
-            if (PATH_CURRENT.equals(element)) {
-                // current folder, ignore it
-            }
-            else if (PATH_TOP.equals(element)) {
-                // top folder, skip previous element
-                tops++;
-            }
-            else {
-                if (tops > 0) {
-                    // should it be skipped?
-                    tops--;
-                }
-                else {
-                    pathTokens.add(0, element);
-                }
-            }
-        }
-
-        for (int i = 0; i < tops; i++) {
-            pathTokens.add(0, PATH_TOP);
-        }
-
-        return prefix + concatenate(pathTokens, SLASH);
-    }
-
     public static String stripFieldNameSourcePrefix(String fieldName) {
         if (fieldName != null) {
-            if (fieldName.startsWith(SOURCE_ROOT)) {
+            if (fieldName.startsWith(SOURCE_FIELD_NAME)) {
+                return fieldName.substring(SOURCE_FIELD_NAME.length());
+            } else if (fieldName.startsWith(SOURCE_ROOT)) {
                 return fieldName.substring(SOURCE_ROOT.length());
-            }
-            else if (fieldName.startsWith(FIELDS_ROOT)) {
+            } else if (fieldName.startsWith(FIELD_FIELD_NAME)) {
+                return fieldName.substring(FIELD_FIELD_NAME.length());
+            } else if (fieldName.startsWith(FIELDS_ROOT)) {
                 return fieldName.substring(FIELDS_ROOT.length());
             }
         }

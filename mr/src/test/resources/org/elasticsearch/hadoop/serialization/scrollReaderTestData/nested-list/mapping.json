@@ -1,0 +1,11 @@
+{
+  "nested-list": {
+    "mappings": {
+      "properties": {
+        "a": {
+          "type": "long"
+        }
+      }
+    }
+  }
+}

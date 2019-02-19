@@ -20,10 +20,12 @@ package org.elasticsearch.hadoop.rest;
 
 import org.elasticsearch.hadoop.rest.query.BoolQueryBuilder;
 import org.elasticsearch.hadoop.rest.query.FilteredQueryBuilder;
+import org.elasticsearch.hadoop.rest.query.MatchAllQueryBuilder;
 import org.elasticsearch.hadoop.rest.query.QueryBuilder;
 import org.elasticsearch.hadoop.serialization.ScrollReader;
 import org.elasticsearch.hadoop.serialization.json.JacksonJsonGenerator;
 import org.elasticsearch.hadoop.util.Assert;
+import org.elasticsearch.hadoop.util.BytesArray;
 import org.elasticsearch.hadoop.util.EsMajorVersion;
 import org.elasticsearch.hadoop.util.FastByteArrayOutputStream;
 import org.elasticsearch.hadoop.util.StringUtils;
@@ -66,11 +68,17 @@ public class SearchRequestBuilder {
     private String routing;
     private Slice slice;
     private boolean local = false;
+    private String preference = "";
     private boolean excludeSource = false;
+    private boolean readMetadata = false;
 
     public SearchRequestBuilder(EsMajorVersion version, boolean includeVersion) {
         this.version = version;
         this.includeVersion = includeVersion;
+    }
+
+    public boolean isReadMetadata() {
+        return readMetadata;
     }
 
     public String routing() {
@@ -81,13 +89,18 @@ public class SearchRequestBuilder {
         return filters;
     }
 
-    public SearchRequestBuilder indices(String indices) {
-        this.indices = indices;
+    public SearchRequestBuilder resource(Resource resource) {
+        this.indices = resource.index();
+        if (resource.isTyped()) {
+            this.types = resource.type();
+        } else {
+            this.types = null;
+        }
         return this;
     }
 
-    public SearchRequestBuilder types(String types) {
-        this.types = types;
+    public SearchRequestBuilder indices(String indices) {
+        this.indices = indices;
         return this;
     }
 
@@ -138,6 +151,11 @@ public class SearchRequestBuilder {
         return this;
     }
 
+    public SearchRequestBuilder readMetadata(boolean read) {
+        this.readMetadata = read;
+        return this;
+    }
+
     public SearchRequestBuilder routing(String routing) {
         this.routing = routing;
         return this;
@@ -150,6 +168,11 @@ public class SearchRequestBuilder {
 
     public SearchRequestBuilder local(boolean value) {
         this.local = value;
+        return this;
+    }
+
+    public SearchRequestBuilder preference(String preference) {
+        this.preference = preference;
         return this;
     }
 
@@ -188,14 +211,7 @@ public class SearchRequestBuilder {
         uriParams.put("scroll", String.valueOf(scroll.toString()));
         uriParams.put("size", String.valueOf(size));
         if (includeVersion) {
-            uriParams.put("version", "");
-        }
-
-        // override fields
-        if (StringUtils.hasText(fields)) {
-            uriParams.put("_source", HttpEncodingTools.concatenateAndUriEncode(StringUtils.tokenize(fields), StringUtils.DEFAULT_DELIMITER));
-        } else if (excludeSource) {
-            uriParams.put("_source", "false");
+            uriParams.put("version", "true");
         }
 
         // set shard preference
@@ -204,7 +220,7 @@ public class SearchRequestBuilder {
             pref.append("_shards:");
             pref.append(shard);
         }
-        if (local) {
+        if (local || StringUtils.hasText(preference)) {
             if (pref.length() > 0) {
                 if (version.onOrAfter(EsMajorVersion.V_5_X)) {
                     pref.append("|");
@@ -212,7 +228,11 @@ public class SearchRequestBuilder {
                     pref.append(";");
                 }
             }
-            pref.append("_local");
+            if (StringUtils.hasText(preference)) {
+                pref.append(preference);
+            } else {
+                pref.append("_local");
+            }
         }
 
         if (pref.length() > 0) {
@@ -222,6 +242,16 @@ public class SearchRequestBuilder {
         // Request routing
         if (routing != null) {
             uriParams.put("routing", HttpEncodingTools.encode(routing));
+        }
+
+        // Always track total hits on versions that support it. 7.0+ will return lower bounded
+        // hit counts if this is not set, and we want them to be accurate for scroll bookkeeping.
+        if (version.onOrAfter(EsMajorVersion.V_6_X)) {
+            uriParams.put("track_total_hits", "true");
+        }
+
+        if (readMetadata) {
+            uriParams.put("track_scores", "true");
         }
 
         // append params
@@ -240,14 +270,16 @@ public class SearchRequestBuilder {
         return sb.toString();
     }
 
-    public ScrollQuery build(RestRepository client, ScrollReader reader) {
-        String scrollUri = assemble();
+    private BytesArray assembleBody() {
         QueryBuilder root = query;
+        if (root == null) {
+            root = MatchAllQueryBuilder.MATCH_ALL;
+        }
         if (filters.isEmpty() == false) {
             if (version.onOrAfter(EsMajorVersion.V_2_X)) {
-                root = new BoolQueryBuilder().must(query).filters(filters);
+                root = new BoolQueryBuilder().must(root).filters(filters);
             } else {
-                root = new FilteredQueryBuilder().query(query).filters(filters);
+                root = new FilteredQueryBuilder().query(root).filters(filters);
             }
         }
         FastByteArrayOutputStream out = new FastByteArrayOutputStream(256);
@@ -267,15 +299,34 @@ public class SearchRequestBuilder {
             generator.writeBeginObject();
             root.toJson(generator);
             generator.writeEndObject();
+            // override fields
+            if (StringUtils.hasText(fields)) {
+                generator.writeFieldName("_source");
+                generator.writeBeginArray();
+                final String[] fieldsArray = org.apache.commons.lang.StringUtils.split(fields, StringUtils.DEFAULT_DELIMITER);
+                for (String field : fieldsArray) {
+                    generator.writeString(field);
+                }
+                generator.writeEndArray();
+            } else if (excludeSource) {
+                generator.writeFieldName("_source");
+                generator.writeBoolean(false);
+            }
             generator.writeEndObject();
         } finally {
             generator.close();
         }
-        return client.scanLimit(scrollUri, out.bytes(), limit, reader);
+        return out.bytes();
+    }
+
+    public ScrollQuery build(RestRepository client, ScrollReader reader) {
+        String scrollUri = assemble();
+        BytesArray requestBody = assembleBody();
+        return client.scanLimit(scrollUri, requestBody, limit, reader);
     }
 
     @Override
     public String toString() {
-        return "QueryBuilder [" + assemble() + "]";
+        return "QueryBuilder [" + assemble() + "][" + assembleBody() + "]";
     }
 }

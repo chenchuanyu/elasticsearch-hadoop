@@ -6,8 +6,6 @@ include 'hive'
 project(":hive").name = "elasticsearch-hadoop-hive"
 include 'pig'
 project(":pig").name = "elasticsearch-hadoop-pig"
-include 'cascading'
-project(":cascading").name = "elasticsearch-hadoop-cascading"
 
 include 'sql-13'
 project(":sql-13").projectDir = new File(settingsDir, "spark/sql-13")
@@ -19,3 +17,10 @@ project(":sql-20").name = "elasticsearch-spark-20"
 
 include 'storm'
 project(":storm").name = "elasticsearch-storm"
+
+include 'test'
+include 'test:fixtures'
+include 'test:fixtures:minikdc'
+
+include 'qa'
+include 'qa:kerberos'

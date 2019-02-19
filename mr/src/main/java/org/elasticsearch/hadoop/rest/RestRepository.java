@@ -29,10 +29,10 @@ import org.elasticsearch.hadoop.rest.stats.Stats;
 import org.elasticsearch.hadoop.rest.stats.StatsAware;
 import org.elasticsearch.hadoop.serialization.ScrollReader;
 import org.elasticsearch.hadoop.serialization.ScrollReader.Scroll;
-import org.elasticsearch.hadoop.serialization.ScrollReader.ScrollReaderConfig;
+import org.elasticsearch.hadoop.serialization.ScrollReaderConfigBuilder;
 import org.elasticsearch.hadoop.serialization.builder.JdkValueReader;
-import org.elasticsearch.hadoop.serialization.bulk.BulkCommand;
 import org.elasticsearch.hadoop.serialization.bulk.BulkCommands;
+import org.elasticsearch.hadoop.serialization.bulk.BulkEntryWriter;
 import org.elasticsearch.hadoop.serialization.bulk.MetadataExtractor;
 import org.elasticsearch.hadoop.serialization.dto.NodeInfo;
 import org.elasticsearch.hadoop.serialization.dto.ShardInfo;
@@ -42,6 +42,7 @@ import org.elasticsearch.hadoop.serialization.dto.mapping.GeoField.GeoType;
 import org.elasticsearch.hadoop.serialization.dto.mapping.Mapping;
 import org.elasticsearch.hadoop.serialization.dto.mapping.MappingSet;
 import org.elasticsearch.hadoop.serialization.dto.mapping.MappingUtils;
+import org.elasticsearch.hadoop.serialization.handler.read.impl.AbortOnlyHandlerLoader;
 import org.elasticsearch.hadoop.util.Assert;
 import org.elasticsearch.hadoop.util.BytesArray;
 import org.elasticsearch.hadoop.util.BytesRef;
@@ -53,6 +54,7 @@ import org.elasticsearch.hadoop.util.unit.TimeValue;
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -74,10 +76,10 @@ public class RestRepository implements Closeable, StatsAware {
     private boolean writeInitialized = false;
 
     private RestClient client;
-    private BulkCommand command;
     // optional extractor passed lazily to BulkCommand
     private MetadataExtractor metaExtractor;
 
+    private BulkEntryWriter bulkEntryWriter;
     private BulkProcessor bulkProcessor;
 
     // Internal
@@ -133,7 +135,7 @@ public class RestRepository implements Closeable, StatsAware {
             this.writeInitialized = true;
             this.bulkProcessor = new BulkProcessor(client, resources.getResourceWrite(), settings);
             this.trivialBytesRef = new BytesRef();
-            this.command = BulkCommands.create(settings, metaExtractor, client.internalVersion);
+            this.bulkEntryWriter = new BulkEntryWriter(settings, BulkCommands.create(settings, metaExtractor, client.clusterInfo.getMajorVersion()));
         }
     }
 
@@ -165,7 +167,10 @@ public class RestRepository implements Closeable, StatsAware {
         Assert.notNull(object, "no object data given");
 
         lazyInitWriting();
-        doWriteToIndex(command.write(object));
+        BytesRef serialized = bulkEntryWriter.writeBulkEntry(object);
+        if (serialized != null) {
+            doWriteToIndex(serialized);
+        }
     }
 
     /**
@@ -189,10 +194,12 @@ public class RestRepository implements Closeable, StatsAware {
     }
 
     public BulkResponse tryFlush() {
+        Assert.isTrue(writeInitialized, "Cannot flush non-initialized write operation");
         return bulkProcessor.tryFlush();
     }
 
     public void flush() {
+        Assert.isTrue(writeInitialized, "Cannot flush non-initialized write operation");
         bulkProcessor.flush();
     }
 
@@ -213,6 +220,11 @@ public class RestRepository implements Closeable, StatsAware {
                 // Aggregate stats before discarding them.
                 stats.aggregate(bulkProcessor.stats());
                 bulkProcessor = null;
+            }
+
+            if (bulkEntryWriter != null) {
+                bulkEntryWriter.close();
+                bulkEntryWriter = null;
             }
         } finally {
             client.close();
@@ -278,12 +290,12 @@ public class RestRepository implements Closeable, StatsAware {
     }
 
     public MappingSet getMappings() {
-        return FieldParser.parseMapping(client.getMapping(resources.getResourceRead().mapping()));
+        return client.getMappings(resources.getResourceRead());
     }
 
     public Map<String, GeoField> sampleGeoFields(Mapping mapping) {
         Map<String, GeoType> fields = MappingUtils.geoFields(mapping);
-        Map<String, Object> geoMapping = client.sampleForFields(resources.getResourceRead().index(), resources.getResourceRead().type(), fields.keySet());
+        Map<String, Object> geoMapping = client.sampleForFields(resources.getResourceRead(), fields.keySet());
 
         Map<String, GeoField> geoInfo = new LinkedHashMap<String, GeoField>();
         for (Entry<String, GeoType> geoEntry : fields.entrySet()) {
@@ -318,11 +330,13 @@ public class RestRepository implements Closeable, StatsAware {
         }
     }
 
-    public boolean indexExists(boolean read) {
+    public boolean resourceExists(boolean read) {
         Resource res = (read ? resources.getResourceRead() : resources.getResourceWrite());
-        // cheap hit
+        // cheap hit - works for exact index names, index patterns, the `_all` resource, and alias names
         boolean exists = client.indexExists(res.index());
-        if (exists && StringUtils.hasText(res.type())) {
+        // Do we really care if it's typed?
+        // Yes! If the index exists and a type is given, the type should exist on the index as well.
+        if (exists && res.isTyped()) {
             exists = client.typeExists(res.index(), res.type());
         }
 
@@ -331,7 +345,8 @@ public class RestRepository implements Closeable, StatsAware {
         if (!exists && read) {
             try {
                 // make sure the mapping is null since the index might exist but the type might be missing
-                exists = !client.getMapping(res.mapping()).isEmpty();
+                MappingSet mappings = client.getMappings(res);
+                exists = mappings != null && !mappings.isEmpty();
             } catch (EsHadoopInvalidRequest ex) {
                 exists = false;
             }
@@ -339,21 +354,12 @@ public class RestRepository implements Closeable, StatsAware {
         return exists;
     }
 
-    private boolean isReadIndexConcrete() {
-        String index = resources.getResourceRead().index();
-        return !(index.contains(",") || index.contains("*") || client.isAlias(resources.getResourceRead().aliases()));
-    }
-
-    public void putMapping(BytesArray mapping) {
-        client.putMapping(resources.getResourceWrite().index(), resources.getResourceWrite().mapping(), mapping.bytes());
-    }
-
     public boolean touch() {
         return client.touch(resources.getResourceWrite().index());
     }
 
     public void delete() {
-        if (client.internalVersion.on(EsMajorVersion.V_1_X)) {
+        if (client.clusterInfo.getMajorVersion().on(EsMajorVersion.V_1_X)) {
             // ES 1.x - delete as usual
             // Delete just the mapping
             client.delete(resources.getResourceWrite().index() + "/" + resources.getResourceWrite().type());
@@ -361,7 +367,11 @@ public class RestRepository implements Closeable, StatsAware {
         else {
             // try first a blind delete by query (since the plugin might be installed)
             try {
-                client.delete(resources.getResourceWrite().index() + "/" + resources.getResourceWrite().type() + "/_query?q=*");
+                if (resources.getResourceWrite().isTyped()) {
+                    client.delete(resources.getResourceWrite().index() + "/" + resources.getResourceWrite().type() + "/_query?q=*");
+                } else {
+                    client.delete(resources.getResourceWrite().index() + "/_query?q=*");
+                }
             } catch (EsHadoopInvalidRequest ehir) {
                 log.info("Skipping delete by query as the plugin is not installed...");
             }
@@ -374,34 +384,70 @@ public class RestRepository implements Closeable, StatsAware {
             // 250 results
 
             int batchSize = 500;
-            StringBuilder sb = new StringBuilder(resources.getResourceWrite().index() + "/" + resources.getResourceWrite().type());
+            StringBuilder sb = new StringBuilder(resources.getResourceWrite().index());
+            if (resources.getResourceWrite().isTyped()) {
+                sb.append('/').append(resources.getResourceWrite().type());
+            }
             sb.append("/_search?scroll=10m&_source=false&size=");
             sb.append(batchSize);
-            if (client.internalVersion.onOrAfter(EsMajorVersion.V_5_X)) {
+            if (client.clusterInfo.getMajorVersion().onOrAfter(EsMajorVersion.V_5_X)) {
                 sb.append("&sort=_doc");
             }
             else {
                 sb.append("&search_type=scan");
             }
             String scanQuery = sb.toString();
-            ScrollReader scrollReader = new ScrollReader(new ScrollReaderConfig(new JdkValueReader()));
+            ScrollReader scrollReader = new ScrollReader(
+                    ScrollReaderConfigBuilder.builder(new JdkValueReader(), settings)
+                            .setReadMetadata(true)
+                            .setMetadataName("_metadata")
+                            .setReturnRawJson(false)
+                            .setIgnoreUnmappedFields(false)
+                            .setIncludeFields(Collections.<String>emptyList())
+                            .setExcludeFields(Collections.<String>emptyList())
+                            .setIncludeArrayFields(Collections.<String>emptyList())
+                            .setErrorHandlerLoader(new AbortOnlyHandlerLoader()) // Only abort since this is internal
+            );
 
             // start iterating
             ScrollQuery sq = scanAll(scanQuery, null, scrollReader);
             try {
                 BytesArray entry = new BytesArray(0);
 
-                // delete each retrieved batch
-                String format = "{\"delete\":{\"_id\":\"%s\"}}\n";
+                // delete each retrieved batch, keep routing in mind:
+                String baseFormat = "{\"delete\":{\"_id\":\"%s\"}}\n";
+                String routedFormat;
+                if (client.clusterInfo.getMajorVersion().onOrAfter(EsMajorVersion.V_7_X)) {
+                    routedFormat = "{\"delete\":{\"_id\":\"%s\", \"routing\":\"%s\"}}\n";
+                } else {
+                    routedFormat = "{\"delete\":{\"_id\":\"%s\", \"_routing\":\"%s\"}}\n";
+                }
+
+                boolean hasData = false;
                 while (sq.hasNext()) {
+                    hasData = true;
                     entry.reset();
-                    entry.add(StringUtils.toUTF(String.format(format, sq.next()[0])));
+                    Object[] kv = sq.next();
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> value = (Map<String, Object>) kv[1];
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> metadata = (Map<String, Object>) value.get("_metadata");
+                    String routing = (String) metadata.get("_routing");
+                    String encodedId = StringUtils.jsonEncoding((String) kv[0]);
+                    if (StringUtils.hasText(routing)) {
+                        String encodedRouting = StringUtils.jsonEncoding(routing);
+                        entry.add(StringUtils.toUTF(String.format(routedFormat, encodedId, encodedRouting)));
+                    } else {
+                        entry.add(StringUtils.toUTF(String.format(baseFormat, encodedId)));
+                    }
                     writeProcessedToIndex(entry);
                 }
 
-                flush();
-                // once done force a refresh
-                client.refresh(resources.getResourceWrite());
+                if (hasData) {
+                    flush();
+                    // once done force a refresh
+                    client.refresh(resources.getResourceWrite());
+                }
             } finally {
                 stats.aggregate(sq.stats());
                 sq.close();
@@ -417,7 +463,11 @@ public class RestRepository implements Closeable, StatsAware {
 
     public long count(boolean read) {
         Resource res = (read ? resources.getResourceRead() : resources.getResourceWrite());
-        return client.count(res.index() + "/" + res.type(), QueryUtils.parseQuery(settings));
+        if (res.isTyped()) {
+            return client.count(res.index(), res.type(), QueryUtils.parseQuery(settings));
+        } else {
+            return client.count(res.index(), QueryUtils.parseQuery(settings));
+        }
     }
 
     public boolean waitForYellow() {
